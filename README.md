@@ -105,7 +105,7 @@ Ok, ready to get started? The module can be installed into an existing Klipper s
 
 ```
 cd ~
-git clone https://github.com/moggieuk/Happy-Hare.git
+git clone -b devel_kalico_kiauh_v1.0 --single-branch https://github.com/Bradford1040/Happy-Hare.git ~/Happy-Hare
 ```
 
 <br>

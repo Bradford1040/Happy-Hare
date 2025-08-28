@@ -1,2 +1,5 @@
 my_*.cfg
 .DS_Store
+.shellcheckrc
+.vscode
+.venv

@@ -28,9 +28,9 @@ fi
 
 KLIPPER_HOME="${HOME}/klipper"
 MOONRAKER_HOME="${HOME}/moonraker"
-KLIPPER_CONFIG_HOME="${HOME}/printer_data/config"
+KLIPPER_CONFIG_HOME="${HOME}/punisher_data/config"
 OCTOPRINT_KLIPPER_CONFIG_HOME="${HOME}"
-KLIPPER_LOGS_HOME="${HOME}/printer_data/logs"
+KLIPPER_LOGS_HOME="${HOME}/punisher_data/logs"
 OLD_KLIPPER_CONFIG_HOME="${HOME}/klipper_config"
 
 if [ "$IS_MIPS" -eq 1 ]; then
@@ -537,7 +537,7 @@ read_previous_config() {
         IFS=', ' read -r -a gates_array <<< "$num_gates"
         _hw_num_gates=0
         for gate in "${gates_array[@]}"; do
-          ((_hw_num_gates += gate))
+        ((_hw_num_gates += gate))
         done
     fi
 
