@@ -3,14 +3,15 @@
 #
 # Installer / Updater script
 #
-# Copyright (C) 2022  moggieuk#6538 (discord) moggieuk@hotmail.com
+# Copyright (C) 2022-2026 moggieuk#6538 (discord)
+#                         moggieuk@hotmail.com
 #
 # Creality K1 Support
 #               2024  hamyy <oudy_1999@hotmail.com>
 #               2024  Unsweeticetea <iamzevle@gmail.com>
 #               2024  Dmitry Kychanov <k1-801@mail.ru>
 #
-VERSION=3.3 # Important: Keep synced with mmy.py
+VERSION=3.42 # Important: Keep synced with mmy.py
 
 F_VERSION=$(echo "$VERSION" | sed 's/\([0-9]\+\)\.\([0-9]\)\([0-9]\)/\1.\2.\3/')
 SCRIPT="$(readlink -f "$0")"
@@ -19,11 +20,17 @@ SCRIPTPATH="$(dirname "$SCRIPT")"
 SCRIPTNAME="$0"
 ARGS=( "$@" )
 
-# Creality K1 series printers run on MIPS, with a limited instruction set and different default klipper directories
-# Checking for machine type is the easiest way so far to spot them (will be set to 1 if on MIPS):
-IS_MIPS=0
-if [ $(uname -m) = "mips" ]; then
-    IS_MIPS=1
+# Provide klipper installation path and settings for different systems
+
+OS_CREALITY_K1="creality-k1"
+OS_FLYOS_FAST="flyos-fast"
+OS_TYPE=""
+if [ $(uname -m) = "mips" ] && [ -d "/usr/data/creality" ]; then
+    OS_TYPE="${OS_CREALITY_K1}"
+    echo "Detected Creality K1 series printer"
+elif [ $(sed -n 's/^NAME="\(.*\)"/\1/p' /etc/os-release 2>/dev/null) = "FlyOS-Fast" ]; then
+    OS_TYPE="${OS_FLYOS_FAST}"
+    echo "Detected FlyOS-Fast"
 fi
 
 KLIPPER_HOME="${HOME}/klipper"
@@ -33,10 +40,16 @@ OCTOPRINT_KLIPPER_CONFIG_HOME="${HOME}"
 KLIPPER_LOGS_HOME="${HOME}/punisher_data/logs"
 OLD_KLIPPER_CONFIG_HOME="${HOME}/klipper_config"
 
-if [ "$IS_MIPS" -eq 1 ]; then
+if [ "$OS_TYPE" = "$OS_CREALITY_K1" ]; then
     KLIPPER_HOME="/usr/share/klipper"
     MOONRAKER_HOME="/usr/data/moonraker/moonraker"
     KLIPPER_CONFIG_HOME="/usr/data/printer_data/config"
+    unset OCTOPRINT_KLIPPER_CONFIG_HOME
+    unset OLD_KLIPPER_CONFIG_HOME
+elif [ "$OS_TYPE" = "$OS_FLYOS_FAST" ]; then
+    KLIPPER_HOME="/data/klipper"
+    MOONRAKER_HOME="/data/moonraker"
+    KLIPPER_CONFIG_HOME="/usr/share/printer_data/config"
     unset OCTOPRINT_KLIPPER_CONFIG_HOME
     unset OLD_KLIPPER_CONFIG_HOME
 fi
@@ -118,8 +131,8 @@ self_update() {
     cd "$SCRIPTPATH"
 
     set +e
-    # timeout is unavailable on MIPS
-    if [ "$IS_MIPS" -ne 1 ]; then
+    # There is no timeout function provided in the system
+    if [ -n "$(which timeout)" ]; then
         BRANCH=$(timeout 3s git branch --show-current)
     else
         BRANCH=$(git branch --show-current)
@@ -197,26 +210,23 @@ function nextsuffix {
 }
 
 verify_not_root() {
-    if [ "$IS_MIPS" -ne 1 ]; then
+    if [ "$OS_TYPE" = "$OS_CREALITY_K1" ]; then
+        echo -e "${WARNING}This script is run on a ${OS_TYPE} system, so we want it to be run as root"
+        return
+    elif [ "$OS_TYPE" = "$OS_FLYOS_FAST" ]; then
+        echo -e "${WARNING}This script is run on a ${OS_TYPE} system, so we want it to be run as root"
+        return
+    else
         if [ "$EUID" -eq 0 ]; then
             echo -e "${ERROR}This script must not run as root"
             exit -1
         fi
-    else
-        echo -e "${WARNING}This script is running on a MIPS system, so we expect it to be run as root"
     fi
 }
 
 check_klipper() {
     if [ "$NOSERVICE" -ne 1 ]; then
-        if [ "$IS_MIPS" -ne 1 ]; then
-            if [ "$(systemctl list-units --full -all -t service --no-legend | grep -F "${KLIPPER_SERVICE}")" ]; then
-                echo -e "${DIM}Klipper ${KLIPPER_SERVICE} systemd service found"
-            else
-                echo -e "${ERROR}Klipper ${KLIPPER_SERVICE} systemd service not found! Please install Klipper first"
-                exit -1
-            fi
-        else
+        if [ "$OS_TYPE" = "$OS_CREALITY_K1" ]; then
             # There is no systemd on MIPS, we can only check the running processes
             running_klipper_pid=$(ps -o pid,comm,args | grep [^]]/klipper/klippy/klippy.py | awk '{print $1}')
             KLIPPER_PID_FILE=/var/run/klippy.pid
@@ -227,13 +237,22 @@ check_klipper() {
                 echo -e "${ERROR}Klipper service not found! Please install Klipper first"
                 exit -1
             fi
+        else
+            if [ "$(systemctl list-units --full -all -t service --no-legend | grep -F "${KLIPPER_SERVICE}")" ]; then
+                echo -e "${DIM}Klipper ${KLIPPER_SERVICE} systemd service found"
+            else
+                echo -e "${ERROR}Klipper ${KLIPPER_SERVICE} systemd service not found! Please install Klipper first"
+                exit -1
+            fi
         fi
     fi
 }
 
 check_octoprint() {
-    if [ "$IS_MIPS" -eq 1 ]; then
+    if [ "$OS_TYPE" = "$OS_CREALITY_K1" ]; then
         OCTOPRINT=0 # Octoprint can not be set up on MIPS
+    elif [ "$OS_TYPE" = "$OS_FLYOS_FAST" ]; then
+        OCTOPRINT=0 # Octoprint can not be set up on FlyOS-Fast
     elif [ "$NOSERVICE" -ne 1 ]; then
         if [ "$(sudo systemctl list-units --full -all -t service --no-legend | grep -F "octoprint.service")" ]; then
             echo -e "${DIM}OctoPrint service found"
@@ -368,7 +387,10 @@ parse_file() {
                         fi
                     fi
                     # Set/overwrite value in memory
-                    if echo "$value" | grep -q '^{.*}$'; then
+                    if echo "$value" | grep -q '^{ .*}$'; then
+                        # Special case drying_data dict format. This is fragile, can't wait for v4 to launch!
+                        eval "${combined}=\"${value}\""
+                    elif echo "$value" | grep -q '^{.*}$'; then
                         eval "${combined}=\$${value}"
                     elif [ "${value%"${value#?}"}" = "'" ]; then
                         eval "${combined}=\'${value}\'"
@@ -496,7 +518,7 @@ read_previous_mmu_type() {
     echo -e "${INFO}HAS_SERVO=${HAS_SERVO}"
     echo -e "${INFO}HAS_ENCODER=${HAS_ENCODER}"
     echo -e "${INFO}HAS_ESPOOLER=${HAS_ESPOOLER}"
-    echo -e "${INFO}Determined you have a ${_hw_selector_type}"
+    echo -e "${INFO}Determined you have a ${_hw_selector_type} or similar"
 }
 
 # Set default parameters from the distribution (reference) config files
@@ -698,6 +720,31 @@ read_previous_config() {
     if [ "${_param_sync_feedback_enable}" != "" ]; then
         _param_sync_feedback_enabled=${_param_sync_feedback_enable}
     fi
+
+    # v3.4.0 - led config moved to v4 format (from macro to python module)
+    # <users are going to be responsible for this...>
+    #if [ "${variable_led_enable}" != "" ]; then
+    #    _hw_led_enable=$(convert_boolean_string_to_int "${variable_led_enable}")
+    #fi
+
+    # v3.4.2 - not upgraded because new values will correct user adjustments
+    # sync_multiplier_high: 1.05
+    # sync_multiplier_low: 0.95
+    # >> sync_feedback_speed_multiplier: 5
+    # >> sync_feedback_extrude_threshold: 5
+    # v3.4.2 - name rationalization
+    # selector_touch_enable >> selector_touch_enabled
+    # enable_clog_detection >> flowguard_encoder_mode
+    # enable_endless_spool >> endless_spool_enabled
+    if [ "${_param_selector_touch_enable}" != "" ]; then
+        _param_selector_touch_enabled=${_param_selector_touch_enable}
+    fi
+    if [ "${_param_enable_clog_detection}" != "" ]; then
+        _param_flowguard_encoder_mode=${_param_enable_clog_detection}
+    fi
+    if [ "${_param_enable_endless_spool}" != "" ]; then
+        _param_endless_spool_enabled=${_param_enable_endless_spool}
+    fi
 }
 
 check_for_999() {
@@ -868,6 +915,74 @@ EOF
         echo "${new_section}" >> "${hardware_cfg}"
         echo -e "${INFO}Added new [mmu_machine] section to mmu_hardware.cfg..."
     fi
+
+    # v3.4.0: Update [mmu_leds] section for v4 python impl
+    found_old_mmu_leds=$(grep -E -c "^\[mmu_leds\]" ${hardware_cfg} || true)
+    if [ "${found_old_mmu_leds}" -eq 1 ]; then
+
+        sed "s/\[mmu_leds\]/\[mmu_leds unit0\]/g" "${hardware_cfg}" > "${hardware_cfg}.tmp" && mv "${hardware_cfg}.tmp" ${hardware_cfg}
+        new_section=$(cat <<EOF
+
+# Default effects for LED segments when not providing action status
+#    off              - LED's off
+#    on               - LED's white
+#    gate_status      - indicate gate availability / status            (printer.mmu.gate_status)
+#    filament_color   - display filament color defined in gate map     (printer.mmu.gate_color_rgb)
+#    slicer_color     - display slicer defined set color for each gate (printer.mmu.slicer_color_rgb)
+#   (r,g,b)           - display static r,g,b color e.g. "0,0,0.3" for dim blue
+#    _effect_         - display the named led effect
+#
+enabled: True                           # True = LEDs are enabled at startup (MMU_LED can control), False = Disabled
+animation: True                         # True = Use led-animation-effects, False = Static LEDs
+exit_effect: gate_status                #    off|gate_status|filament_color|slicer_color|r,g,b|_effect_
+entry_effect: filament_color            #    off|gate_status|filament_color|slicer_color|r,g,b|_effect_
+status_effect: filament_color           # on|off|gate_status|filament_color|slicer_color|r,g,b|_effect_
+logo_effect: (0, 0, 0.3)                #    off                                        |r,g,b|_effect_
+white_light: (1, 1, 1)                  # RGB color for static white light
+black_light: (.01, 0, .02)              # RGB color used to represent "black" (filament)
+empty_light: (0, 0, 0)                  # RGB color used to represent empty gate
+
+# Default effects (animation: True) / static rbg (animation False) to apply to actions
+#   effect_name, (r,b,g)
+#
+# IMPORTANT: Effects must be from [mmu_led_effects] set defined in mmu_leds.cfg
+#
+effect_loading:            mmu_blue_clockwise_slow, (0, 0, 0.4)
+effect_loading_extruder:   mmu_blue_clockwise_fast, (0, 0, 1)
+effect_unloading:          mmu_blue_anticlock_slow, (0, 0, 0.4)
+effect_unloading_extruder: mmu_blue_anticlock_fast, (0, 0, 1)
+effect_heating:            mmu_breathing_red,       (0.3, 0, 0)
+effect_selecting:          mmu_white_fast,          (0.2, 0.2, 0.2)
+effect_checking:           mmu_white_fast,          (0.8, 0.8, 0.8)
+effect_initialized:        mmu_rainbow,             (0.5, 0.2, 0)
+effect_error:              mmu_strobe,              (1, 0, 0)
+effect_complete:           mmu_sparkle,             (0.3, 0.3, 0.3)
+effect_gate_selected:      mmu_static_blue,         (0, 0, 1)
+effect_gate_available:     mmu_static_green,        (0, 0.5, 0)
+effect_gate_available_sel: mmu_ready_green,         (0, 0.75, 0)
+effect_gate_unknown:       mmu_static_orange,       (0.5, 0.2, 0)
+effect_gate_unknown_sel:   mmu_ready_orange ,       (0.75, 0.3, 0)
+effect_gate_empty:         mmu_static_black,        (0, 0, 0)
+effect_gate_empty_sel:     mmu_ready_blue,          (0, 0, 0.2)
+
+EOF
+)
+        temp_file=$(mktemp)
+        echo "$new_section" > "$temp_file"
+        awk '
+            BEGIN { found = 0 }
+            /^frame_rate/ && !found {
+                print
+                while ((getline line < "'"$temp_file"'") > 0) print line
+                close("'"$temp_file"'")
+                found = 1
+                next
+            }
+            { print }
+        ' "${hardware_cfg}" > "${hardware_cfg}.tmp" && mv "${hardware_cfg}.tmp" "${hardware_cfg}"
+        rm "$temp_file"
+        echo -e "${INFO}Upgraded [mmu_leds] section in mmu_hardware.cfg with new settings..."
+    fi
 }
 
 copy_config_files() {
@@ -963,8 +1078,12 @@ copy_config_files() {
         if [ "${file}" == "mmu.cfg" -o "${file}" == "mmu_hardware.cfg" ]; then
 
             # Kludge to support complete h/w configurations for dedicated MMUs
-            if [ "${_hw_mmu_vendor}" == "KMS" ]; then
-                cp "${src}.kms" ${dest}
+            if [ "${_hw_mmu_vendor}" == "KMS" -o "${_hw_mmu_vendor}" == "VVD" ]; then
+                if [ "${_hw_mmu_vendor}" == "KMS" ]; then
+                    cp "${src}.kms" ${dest}
+                else
+                    cp "${src}.vvd" ${dest}
+                fi
 
                 # Do all the token substitution
                 cat ${dest} | sed -e "$sed_expr" "${dest}" > "${dest}.tmp" > ${dest}.tmp && mv ${dest}.tmp ${dest}
@@ -1016,8 +1135,7 @@ copy_config_files() {
 
             # Handle LED option - Comment out if disabled (section is last, go comment to end of file)
             if [ "${file}" == "mmu_hardware.cfg" -a "$SETUP_LED" == "no" ]; then
-                sed "/^\[neopixel mmu_leds\]/,+4 {/^[^#]/ s/^/#/}" ${dest} > ${dest}.tmp && mv ${dest}.tmp ${dest}
-                sed "/^\[mmu_leds\]/,+6 {/^[^#]/ s/^/#/}" ${dest} > ${dest}.tmp && mv ${dest}.tmp ${dest}
+                sed '/^\[\(neopixel mmu_leds\|mmu_leds\)\]/,${ /^[^#]/ s/^/#/ }' "${dest}" > "${dest}.tmp" && mv "${dest}.tmp" "${dest}"
             fi
 
             # Handle Encoder option - Comment out if not fitted so can easily be added later
@@ -1269,14 +1387,14 @@ install_update_manager() {
         restart=0
 
         update_section=$(grep -c '\[update_manager happy-hare\]' ${file} || true)
-        if [ "${update_section}" -eq 0 ]; then
+        if [ "${update_section}" -eq 0 ] && [ "$OS_TYPE" != "$OS_FLYOS_FAST" ]; then
             echo "" >> "${file}"
             while read -r line; do
                 echo -e "${line}" >> "${file}"
             done < "${SRCDIR}/moonraker_update.txt"
             echo "" >> "${file}"
             # The path for Happy-Hare on MIPS is /usr/data/Happy-Hare
-            if [ "$IS_MIPS" -eq 1 ]; then
+            if [ "$OS_TYPE" = "$OS_CREALITY_K1" ]; then
                 sed -i 's|path: ~/Happy-Hare|path: /usr/data/Happy-Hare|' "${file}"
                 echo -e "${INFO}Update Happy-Hare path for MIPS architecture."
             fi
@@ -1355,12 +1473,12 @@ restart_klipper() {
     if [ "$NOSERVICE" -ne 1 ]; then
         echo -e "${INFO}Restarting Klipper..."
 
-        if [ "$IS_MIPS" -ne 1 ]; then
-            sudo systemctl restart ${KLIPPER_SERVICE}
-        else
+        if [ "$OS_TYPE" = "$OS_CREALITY_K1" ]; then
             set +e
             /etc/init.d/*klipper_service restart
             set -e
+        else
+            sudo systemctl restart ${KLIPPER_SERVICE}
         fi
     else
         echo -e "${WARNING}Klipper restart suppressed - Please restart ${KLIPPER_SERVICE} by hand"
@@ -1371,12 +1489,12 @@ restart_moonraker() {
     if [ "$NOSERVICE" -ne 1 ]; then
         echo -e "${INFO}Restarting Moonraker..."
 
-        if [ "$IS_MIPS" -ne 1 ]; then
-            sudo systemctl restart moonraker
-        else
+        if [ "$OS_TYPE" = "$OS_CREALITY_K1" ]; then
             set +e
             /etc/init.d/*moonraker_service restart
             set -e
+        else
+            sudo systemctl restart moonraker
         fi
     else
         echo -e "${WARNING}Moonraker restart suppressed - Please restart by hand"
@@ -1466,7 +1584,7 @@ questionaire() {
     OPTIONS=()
     option ERCF11         'Enraged Rabbit Carrot Feeder v1.1'
     option ERCF20         'ERCF v2.0'
-    option ERCF25         'ERCF v2.5'
+    option ERCF30         'ERCF v3.0'
     option TRADRACK       'Tradrack v1.0'
     option ANGRY_BEAVER   'Angry Beaver v1.0'
     option BOX_TURTLE     'Box Turtle v1.0'
@@ -1478,7 +1596,7 @@ questionaire() {
     option QUATTRO_BOX    'QuattroBox v1.0'
     option QUATTRO_BOX11  'QuattroBox v1.1'
     option MMX            'MMX'
-    #option VVD            'BigTreeTech VVD'
+    option VVD            'BigTreeTech ViViD (BETA)'
     option KMS            'KMS'
     option OTHER          'Other / Custom (or just want starter config files)'
     prompt_option opt 'MMU Type' "${OPTIONS[@]}"
@@ -1497,6 +1615,7 @@ questionaire() {
             _hw_gear_gear_ratio="80:20"
             _hw_gear_run_current=0.5
             _hw_gear_hold_current=0.1
+            _hw_sel_gear_ratio="1:1"
             _hw_sel_run_current=0.4
             _hw_sel_hold_current=0.2
             _hw_encoder_resolution=0.7059
@@ -1547,6 +1666,7 @@ questionaire() {
             _hw_gear_gear_ratio="80:20"
             _hw_gear_run_current=0.5
             _hw_gear_hold_current=0.1
+            _hw_sel_gear_ratio="1:1"
             _hw_sel_run_current=0.4
             _hw_sel_hold_current=0.2
             _hw_encoder_resolution=1.0
@@ -1559,7 +1679,7 @@ questionaire() {
             _param_servo_buzz_gear_on_down=1
             ;;
 
-        "$ERCF25")
+        "$ERCF30")
             HAS_ENCODER=yes
             HAS_SELECTOR=yes
             HAS_SERVO=yes
@@ -1571,14 +1691,15 @@ questionaire() {
             _hw_require_bowden_move=1
             _hw_filament_always_gripped=0
             _hw_gear_gear_ratio="1:1"
-            _hw_gear_run_current=1.0
+            _hw_gear_run_current=0.8
             _hw_gear_hold_current=0.2
-            _hw_sel_run_current=0.4
+            _hw_sel_gear_ratio="1:1"
+            _hw_sel_run_current=0.7
             _hw_sel_hold_current=0.2
             _hw_encoder_resolution=1.0
             _param_extruder_homing_endstop="collision"
             _param_gate_homing_endstop="encoder"
-            _param_gate_parking_distance=10
+            _param_gate_parking_distance=16
             _param_servo_buzz_gear_on_down=3
             _param_servo_duration=0.4
             _param_servo_always_active=0
@@ -1599,6 +1720,7 @@ questionaire() {
             _hw_gear_gear_ratio="50:17"
             _hw_gear_run_current=1.27
             _hw_gear_hold_current=0.2
+            _hw_sel_gear_ratio="1:1"
             _hw_sel_run_current=0.63
             _hw_sel_hold_current=0.2
             _param_extruder_homing_endstop="none"
@@ -1640,6 +1762,7 @@ questionaire() {
             _param_extruder_homing_endstop="extruder"
             _param_gate_homing_endstop="extruder"
             _param_gate_homing_max=500
+            _param_gate_preload_homing_max=500
             _param_gate_parking_distance=50
             _param_gear_homing_speed=80
             _param_has_filament_buffer=0
@@ -1753,6 +1876,7 @@ questionaire() {
             _hw_gear_gear_ratio="1:1"
             _hw_gear_run_current=0.7
             _hw_gear_hold_current=0.1
+            _hw_sel_gear_ratio="1:1"
             _hw_sel_run_current=0.63
             _hw_sel_hold_current=0.2
 
@@ -1775,8 +1899,8 @@ questionaire() {
             _hw_variable_bowden_lengths=0
             _hw_variable_rotation_distances=0
             _hw_require_bowden_move=1
-            _hw_filament_always_gripped=1
-            _hw_gear_gear_ratio="1.28:1"
+            _hw_filament_always_gripped=0
+            _hw_gear_gear_ratio="1.25:1"
             _hw_gear_run_current=0.7
             _hw_gear_hold_current=0.1
             _hw_chain_count=4
@@ -1898,6 +2022,7 @@ questionaire() {
             _param_extruder_homing_endstop="none"
             _param_gate_homing_endstop="mmu_gate"
             _param_gate_homing_max=1000
+            _param_gate_preload_homing_max=1000
             _param_gate_parking_distance=25
             _param_gear_homing_speed=80
             _param_selector_gate_angles="60,0,180,120"
@@ -1906,12 +2031,46 @@ questionaire() {
         "$VVD")
             # Comming soon (Bigtreetech)...
             HAS_ENCODER=no
-            HAS_SELECTOR=no
+            HAS_SELECTOR=yes
+            HAS_SERVO=no
+            HAS_ESPOOLER=yes
+            SETUP_LED=yes
+            # Note VVD has preconfigured mmu_hardware.cfg based on dedicated electronics
+            _hw_num_gates=4
+            _hw_mmu_vendor="VVD"
+            _hw_mmu_version="1.0"
+            _hw_selector_type=IndexedSelector
+
+            # mmu_parameters config
+            _param_extruder_homing_endstop="filament_compression"
+            _param_extruder_homing_max=250
+            _param_extruder_homing_buffer=80
+            _param_gate_homing_endstop="mmu_gear"
+            _param_gate_homing_max=250
+            _param_gate_unload_buffer=80
+            _param_gate_parking_distance=30
+            _param_gate_preload_homing_max=750
+            _param_gate_preload_parking_distance=30
+            _param_gate_final_eject_distance=750
+            _param_gate_autoload=1
+            _param_has_filament_buffer=0
+
+            _param_autocal_bowden_length=1
+            _param_autotune_bowden_length=0
+            _param_skip_cal_rotation_distance=1
+            _param_autotune_rotation_distance=1
+
+            _param_sync_feedback_enabled=1
+            _param_sync_feedback_buffer_range=8
+            _param_sync_feedback_buffer_maxrange=12
+
+            _param_update_aht10_commands=1
             ;;
 
         "$KMS")
             HAS_ENCODER=yes
             HAS_SELECTOR=no
+            HAS_SERVO=no
             HAS_ESPOOLER=yes
             SETUP_LED=yes
             # Note KMS has preconfigured mmu_hardware.cfg based on dedicated electronics
@@ -1923,9 +2082,9 @@ questionaire() {
             # mmu_parameters config
             _param_extruder_homing_endstop="filament_compression"
             _param_gate_homing_endstop="mmu_gate"
+            _param_gate_homing_max=300
             _param_gate_preload_homing_max=300
             _param_gate_preload_parking_distance=-10
-            _param_gate_homing_max=300
             _param_gate_parking_distance=20
             _param_gate_unload_buffer=50
             _param_gate_endstop_to_encoder=14
@@ -1943,8 +2102,6 @@ questionaire() {
             _param_sync_feedback_enabled=1
             _param_sync_feedback_buffer_range=8
             _param_sync_feedback_buffer_maxrange=12
-
-            # TODO: Tweak espooler tuned variables?..
             ;;
 
         *)
@@ -1965,6 +2122,7 @@ questionaire() {
             _hw_gear_gear_ratio="1:1"
             _hw_gear_run_current=0.7
             _hw_gear_hold_current=0.1
+            _hw_sel_gear_ratio="1:1"
             _hw_sel_run_current=0.5
             _hw_sel_hold_current=0.1
 
@@ -1973,6 +2131,7 @@ questionaire() {
             OPTIONS=() # reset option array
             option TYPE_A_WITH_ENCODER                            'Type-A (selector) with Encoder'
             option TYPE_A_NO_ENCODER                              'Type-A (selector), No Encoder'
+            option TYPE_A_NO_ENCODER_NO_SERVO_NO_ESPOOLER         'Type-A (selector), No Encoder, No Servo, No ESpooler'
             option TYPE_B_WITH_ENCODER                            'Type-B (mutliple filament drive steppers) with Encoder'
             option TYPE_B_WITH_SHARED_GATE_AND_ENCODER            'Type-B (multiple filament drive steppers) with shared Gate sensor and Encoder'
             option TYPE_B_WITH_SHARED_GATE_NO_ENCODER             'Type-B (multiple filament drive steppers) with shared Gate sensor, No Encoder'
@@ -1989,6 +2148,15 @@ questionaire() {
                     ;;
                 "$TYPE_A_NO_ENCODER")
                     HAS_ENCODER=no
+                    _param_gate_homing_endstop="mmu_gate"
+                    _param_extruder_homing_endstop="none"
+                    echo
+                    echo -e "${WARNING}    IMPORTANT: Since you have a custom MMU with selector you will need to setup some CAD dimensions in mmu_parameters.cfg... See doc"
+                    ;;
+                "$TYPE_A_NO_ENCODER_NO_SERVO_NO_ESPOOLER")
+                    HAS_ENCODER=no
+                    HAS_SERVO=no
+                    HAS_ESPOOLER=no
                     _param_gate_homing_endstop="mmu_gate"
                     _param_extruder_homing_endstop="none"
                     echo
@@ -2055,7 +2223,7 @@ questionaire() {
             ;;
         esac
 
-    if [ "${_hw_mmu_vendor}" != "KMS" ]; then
+    if [ "${_hw_mmu_vendor}" != "KMS" -a "${_hw_mmu_vendor}" != "VVD" ]; then
         echo -e "${PROMPT}${SECTION}How many gates (lanes) do you have?${INPUT}"
         _hw_num_gates=$(prompt_123 "Number of gates")
     fi
@@ -2063,7 +2231,7 @@ questionaire() {
     if [ "${_hw_mmu_vendor}" == "KMS" ]; then
         pattern="Klipper_stm32"
         for line in `ls /dev/serial/by-id 2>/dev/null | grep -E "Klipper_"`; do
-            if echo ${line} | grep --quiet "${pattern}"; then
+            if echo ${line} | grep -q "${pattern}"; then
                 echo -e "${PROMPT}${SECTION}Is '/dev/serial/by-id/${line}' a ${EMPHASIZE}KMS${PROMPT} controller serial port?${INPUT}"
                 OPTIONS=()
                 option KMS     'KMS MMU'
@@ -2072,6 +2240,39 @@ questionaire() {
                 prompt_option opt 'KMS MCU?' "${OPTIONS[@]}"
                 case $opt in
                     "$KMS")
+                        _hw_serial1="/dev/serial/by-id/${line}"
+                        ;;
+                    "$BUFFER")
+                        _hw_serial2="/dev/serial/by-id/${line}"
+                        ;;
+                    *)
+                        ;;
+                esac
+            fi
+        done
+        if [ "${_hw_serial1}" == "" ]; then
+            echo
+            echo -e "${WARNING}    Couldn't find your MMU serial port, but no worries - I'll configure the default and you can manually change later"
+            _hw_serial1='/dev/ttyACM1 # Config guess. Run ls -l /dev/serial/by-id and set manually'
+        fi
+        if [ "${_hw_serial2}" == "" ]; then
+            echo
+            echo -e "${WARNING}    Couldn't find your Bufffer (sync-feedback sensor) serial port, but no worries - I'll configure the default and you can manually change later"
+            _hw_serial1='/dev/ttyACM2 # Config guess. Run ls -l /dev/serial/by-id and set manually'
+        fi
+
+    elif [ "${_hw_mmu_vendor}" == "VVD" ]; then
+        pattern="Klipper_stm32"
+        for line in `ls /dev/serial/by-id 2>/dev/null | grep -E "Klipper_"`; do
+            if echo ${line} | grep -q "${pattern}"; then
+                echo -e "${PROMPT}${SECTION}Is '/dev/serial/by-id/${line}' a ${EMPHASIZE}KMS${PROMPT} controller serial port?${INPUT}"
+                OPTIONS=()
+                option VVD     'ViVid MMU'
+                option BUFFER  'ViViD Buffer (sync-feedback sensor)'
+                option NEITHER 'No, not related to ViViD'
+                prompt_option opt 'ViViD MCU?' "${OPTIONS[@]}"
+                case $opt in
+                    "$VVD")
                         _hw_serial1="/dev/serial/by-id/${line}"
                         ;;
                     "$BUFFER")
@@ -2108,7 +2309,9 @@ questionaire() {
         option EASY_BRD_RP2040      'EASY-BRD with RP2040'
         option MELLOW_BRD_1         'Mellow EASY-BRD v1.x (with CANbus)'
         option MELLOW_BRD_2         'Mellow EASY-BRD v2.x (with CANbus)'
+		option TZB_1                'TZB v1.0'
         option AFC_LITE_1           'AFC Lite v1.0'
+        option WGB_3                'WGB v3.0'
         option SKR_PICO_1           'BTT SKR Pico v1.0'
         option EBB42_12             'BTT EBB 42 CANbus v1.2 (for MMX or Pico)'
         option OTHER                'Not in list / Unknown'
@@ -2150,8 +2353,16 @@ questionaire() {
                 _hw_brd_type="MELLOW-EASY-BRD-CANv2"
                 pattern="Klipper_rp2040"
                 ;;
+			"$TZB_1")
+                _hw_brd_type="TZB_1"
+                pattern="Klipper_stm32"
+                ;;	
             "$AFC_LITE_1")
                 _hw_brd_type="AFC_LITE_1"
+                pattern="Klipper_stm32"
+                ;;
+            "$WGB_3")
+                _hw_brd_type="WGB_3"
                 pattern="Klipper_stm32"
                 ;;
             "$SKR_PICO_1")
@@ -2169,7 +2380,7 @@ questionaire() {
         esac
 
         for line in `ls /dev/serial/by-id 2>/dev/null | grep -E "Klipper_"`; do
-            if echo ${line} | grep --quiet "${pattern}"; then
+            if echo ${line} | grep -q "${pattern}"; then
                 echo -e "${PROMPT}${SECTION}This looks like your ${EMPHASIZE}${_hw_brd_type}${PROMPT} controller serial port. Is that correct?${INPUT}"
                 yn=$(prompt_yn "/dev/serial/by-id/${line}")
                 echo
@@ -2338,6 +2549,7 @@ questionaire() {
                 echo -e "${PROMPT}${SECTION}Which servo are you using?${INPUT}"
                 OPTIONS=()
                 option MMX_BOM 'MG996R'
+                option EMAX_ES3004 'EMAX ES3004'
                 option OTHER 'Not listed / Other'
                 prompt_option opt 'Servo' "${OPTIONS[@]}"
                 case $opt in
@@ -2348,6 +2560,14 @@ questionaire() {
                         _param_servo_always_active=0
                         _param_servo_duration=0.6
                         _param_servo_dwell=1.0
+                        ;;
+                    "$EMAX_ES3004")
+                        _hw_maximum_servo_angle=140
+                        _hw_minimum_pulse_width=0.00070
+                        _hw_maximum_pulse_width=0.00230
+                        _param_servo_always_active=0
+                        _param_servo_duration=0.6
+                        _param_servo_dwell=1.2
                         ;;
                     *)
                         _hw_maximum_servo_angle=180
