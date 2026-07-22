@@ -369,7 +369,7 @@ class MmuServer:
         response = await self.http_client.request(
             method="PATCH",
             url=f"{self.spoolman.spoolman_url}/v1/spool/{spool_id}",
-            body=json.dumps(data)
+            body=data
         )
         if response.status_code == 404:
             logging.error(f"'{self.spoolman.spoolman_url}/v1/spool/{spool_id}' not found")
@@ -394,7 +394,7 @@ class MmuServer:
         response = await self.http_client.request(
             method="PATCH",
             url=f"{self.spoolman.spoolman_url}/v1/spool/{spool_id}",
-            body=json.dumps(data)
+            body=data
         )
         if response.status_code == 404:
             logging.error(f"'{self.spoolman.spoolman_url}/v1/spool/{spool_id}' not found")
@@ -879,7 +879,7 @@ METADATA_END_PURGING = "CP TOOLCHANGE END"
 # PS/SS uses "extruder_colour", Orca uses "filament_colour" but extruder_colour can exist with empty or single color
 COLORS_REGEX = {
     'PrusaSlicer' : r"^;\s*(?:extruder|filament)_colour\s*=\s*(#.*;*.*)$", #if extruder colour is not set, check filament colour
-    'SuperSlicer' : r"^;\s*extruder_colour\s*=\s*(#.*;*.*)$",
+    'SuperSlicer' : r"^;\s*(?:extruder|filament)_colour\s*=\s*(#.*;*.*)$", #if extruder colour is not set, check filament colour
     'OrcaSlicer'  : r"^;\s*filament_colour\s*=\s*(#.*;*.*)$",
     'BambuStudio' : r"^;\s*filament_colour\s*=\s*(#.*;*.*)$",
 }
